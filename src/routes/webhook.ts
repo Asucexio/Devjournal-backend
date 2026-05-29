@@ -37,11 +37,17 @@ interface TelegramMessage {
   caption_entities?: TelegramMessageEntity[];
 }
 
+interface TelegramMessageDeleted {
+  chat: TelegramChat;
+  message_ids: number[];
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   channel_post?: TelegramMessage;
   edited_channel_post?: TelegramMessage;
+  deleted_messages?: TelegramMessageDeleted;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -97,15 +103,86 @@ router.post("/telegram", async (req: Request, res: Response) => {
   try {
     const update: TelegramUpdate = req.body;
 
-    // We only care about new channel posts (not edits, not private messages)
+    const allowedChannelId = process.env.TELEGRAM_CHANNEL_ID;
+
+    // ── Handle deleted messages ──────────────────────────────────────────────
+    if (update.deleted_messages) {
+      const { chat, message_ids } = update.deleted_messages;
+
+      if (allowedChannelId && String(chat.id) !== String(allowedChannelId)) {
+        console.warn(`[Telegram] Ignored deletion from unknown chat: ${chat.id}`);
+        return;
+      }
+
+      console.log(`[Telegram] Deleting ${message_ids.length} post(s):`, message_ids);
+
+      for (const msgId of message_ids) {
+        const postLink = buildPostLink(chat, msgId);
+        const { error } = await supabase
+          .from("Post")
+          .delete()
+          .eq("post_link", postLink);
+
+        if (error) {
+          console.error(`[Telegram] Failed to delete post with link ${postLink}:`, error.message);
+        } else {
+          console.log(`[Telegram] 🗑️  Deleted post with link: ${postLink}`);
+        }
+      }
+      return;
+    }
+
+    // ── Handle edited channel posts ──────────────────────────────────────────
+    if (update.edited_channel_post) {
+      const edited = update.edited_channel_post;
+
+      if (allowedChannelId && String(edited.chat.id) !== String(allowedChannelId)) return;
+
+      const rawText = edited.text ?? edited.caption ?? "";
+      if (!rawText) return;
+
+      const postLink = buildPostLink(edited.chat, edited.message_id);
+      const tags = extractHashtags(rawText);
+      const cleanPost = stripHashtags(rawText);
+
+      console.log(`[Telegram] ✏️  Editing post: ${postLink}`);
+
+      // Find the existing post by post_link
+      const { data: existing, error: findError } = await supabase
+        .from("Post")
+        .select("id")
+        .eq("post_link", postLink)
+        .single();
+
+      if (findError || !existing) {
+        console.warn(`[Telegram] Could not find post to edit: ${postLink}`);
+        return;
+      }
+
+      const postId: number = (existing as { id: number }).id;
+
+      // Update post content
+      await supabase.from("Post").update({ post: cleanPost }).eq("id", postId);
+
+      // Replace tags
+      await supabase.from("PostTag").delete().eq("post_id", postId);
+      for (const tagName of tags) {
+        const tagId = await upsertTag(tagName);
+        await supabase.from("PostTag").insert({ post_id: postId, tag_id: tagId });
+      }
+
+      console.log(`[Telegram] ✅ Post #${postId} updated with ${tags.length} tag(s)`);
+      return;
+    }
+
+    // ── Handle new channel posts ─────────────────────────────────────────────
     const message = update.channel_post;
     if (!message) return;
 
     const rawText = message.text ?? message.caption ?? "";
     if (!rawText) return;
 
-    // ── Verify it's from the expected channel (optional but recommended) ──
-    const allowedChannelId = process.env.TELEGRAM_CHANNEL_ID;
+    // Verify it's from the expected channel
     if (
       allowedChannelId &&
       String(message.chat.id) !== String(allowedChannelId)

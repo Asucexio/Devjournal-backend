@@ -33,7 +33,7 @@ const fullWebhookUrl = `${WEBHOOK_URL}/webhook/telegram`;
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: fullWebhookUrl,
-        allowed_updates: ["channel_post"], // only listen to channel posts
+        allowed_updates: ["channel_post", "edited_channel_post", "deleted_messages"],
         drop_pending_updates: true,
       }),
     }
