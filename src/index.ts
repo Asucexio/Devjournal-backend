@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import postsRouter from "./routes/posts";
+import webhookRouter from "./routes/webhook";
 import { errorHandler, notFound } from "./middleware/errorHandler";
 
 dotenv.config();
@@ -45,6 +46,7 @@ app.get("/health", (_req, res) => {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 app.use("/posts", postsRouter);
+app.use("/webhook", webhookRouter);
 
 // ─── Error handling ───────────────────────────────────────────────────────────
 
